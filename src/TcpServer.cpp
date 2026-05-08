@@ -119,27 +119,15 @@ void TcpServer::wait()
 
 void TcpServer::stop()
 {
-  if (!started_.load()) {
-    config_.logger->warn("stop() called before start() — no-op");
-    return;
-  }
-
   std::call_once(stopOnce_, [this] {
-    config_.logger->info("TcpServer stopping …");
-
-    // Phase 1: stop accepting new connections and release the work guard so
-    // ioc_ can drain once all pending handlers finish.
+    // Phase 1: stop accepting new connections.
     std::error_code ec;
     acceptor_.close(ec);
-    workGuard_.reset();
 
-    // Phase 2: close existing sessions on the sessionStrand.
-    // We capture a snapshot of the session map, request graceful close on
-    // each one, then schedule a timer to force-close any that are still
-    // connected after the shutdown timeout.
-    asio::post(sessionStrand_, [this] {
-      // Take a local copy so we can iterate without holding the mutex
-      // while the timer fires later.
+    // Phase 2: snapshot sessions and initiate graceful close on each.
+    // All close() calls are posted to ioc_ *before* the work guard is reset,
+    // so ioc_.run() will not exit prematurely.
+    asio::post(ioc_, [this] {
       std::vector<SessionPtr> snapshot;
       {
         std::lock_guard<std::mutex> lk(sessionsMutex_);
@@ -157,25 +145,28 @@ void TcpServer::stop()
       // stop() was called), skip the timer entirely.
       {
         std::lock_guard<std::mutex> lk(sessionsMutex_);
-        if (sessions_.empty())
+        if (sessions_.empty()) {
+          // Phase 3: release work guard so ioc_.run() can exit.
+          workGuard_.reset();
           return;
+        }
       }
 
       // Arm the shutdown timer; cancelled early if all sessions drain first.
-      shutdownTimer_ = std::make_shared<asio::steady_timer>(ioc_);
-      shutdownTimer_->expires_after(
+      auto timer = std::make_shared<asio::steady_timer>(ioc_);
+      timer->expires_after(
           std::chrono::seconds(config_.shutdownTimeoutSec));
-      shutdownTimer_->async_wait([this](const std::error_code& ec) {
+      timer->async_wait([this, timer](const std::error_code& ec) {
         if (ec)
           return;
-        asio::post(sessionStrand_, [this] {
-          std::lock_guard<std::mutex> lk(sessionsMutex_);
-          for (auto& [id, sess] : sessions_) {
-            if (sess->isConnected()) {
-              sess->close();
-            }
+        std::lock_guard<std::mutex> lk(sessionsMutex_);
+        for (auto& [id, sess] : sessions_) {
+          if (sess->isConnected()) {
+            sess->close();
           }
-        });
+        }
+        // Phase 3: always release work guard after timer fires.
+        workGuard_.reset();
       });
     });
   });
@@ -259,9 +250,6 @@ void TcpServer::removeSession(uint64_t id)
 {
   std::lock_guard<std::mutex> lk(sessionsMutex_);
   sessions_.erase(id);
-  if (sessions_.empty() && shutdownTimer_) {
-    shutdownTimer_->cancel();
-  }
 }
 
 SessionPtr TcpServer::getSession(uint64_t id)
