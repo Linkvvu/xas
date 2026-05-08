@@ -6,3 +6,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(asio CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+
+# Library target
+add_library(xas STATIC
+    src/TcpServer.cpp
+    src/TcpSession.cpp
+)
+target_include_directories(xas PUBLIC
+    ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(xas PUBLIC
+    asio::asio
+    spdlog::spdlog
+)
+
+add_subdirectory(tests)
+add_subdirectory(examples/echo)
