@@ -195,7 +195,7 @@ void TcpServer::doAccept()
           return;
         }
 
-        asio::post(sessionStrand_, [this, sock = std::move(socket)]() mutable {
+        asio::post(ioc_, [this, sock = std::move(socket)]() mutable {
           bool overloaded = false;
           {
             std::lock_guard<std::mutex> lk(sessionsMutex_);
@@ -221,8 +221,7 @@ void TcpServer::doAccept()
           sess->setDisconnectCallback([this](SessionPtr s, std::error_code e) {
             if (disconnectCb_)
               disconnectCb_(s, e);
-            asio::post(sessionStrand_,
-                       [this, id = s->id()] { removeSession(id); });
+            asio::post(ioc_, [this, id = s->id()] { removeSession(id); });
           });
 
           if (errorCb_)
