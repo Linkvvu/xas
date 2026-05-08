@@ -12,7 +12,6 @@ TcpServer::TcpServer(std::string host, uint16_t port, ServerConfig config)
     , config_(std::move(config))
     , ioc_()
     , acceptor_(ioc_)
-    , sessionStrand_(asio::make_strand(ioc_))
 {
   // Default logger setup
   if (!config_.logger) {
@@ -105,6 +104,11 @@ bool TcpServer::run()
 
 void TcpServer::wait()
 {
+  if (!started_.load()) {
+    config_.logger->warn("wait() called before start() — no-op");
+    return;
+  }
+
   std::call_once(waitOnce_, [this] {
     for (auto& t : threads_) {
       if (t.joinable())
@@ -115,6 +119,11 @@ void TcpServer::wait()
 
 void TcpServer::stop()
 {
+  if (!started_.load()) {
+    config_.logger->warn("stop() called before start() — no-op");
+    return;
+  }
+
   std::call_once(stopOnce_, [this] {
     config_.logger->info("TcpServer stopping …");
 
