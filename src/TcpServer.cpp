@@ -119,6 +119,11 @@ void TcpServer::wait()
 
 void TcpServer::stop()
 {
+  if (!started_.load()) {
+    config_.logger->warn("stop() called before start() — no-op");
+    return;
+  }
+
   std::call_once(stopOnce_, [this] {
     // Phase 1: stop accepting new connections.
     std::error_code ec;
@@ -154,8 +159,7 @@ void TcpServer::stop()
 
       // Arm the shutdown timer; cancelled early if all sessions drain first.
       auto timer = std::make_shared<asio::steady_timer>(ioc_);
-      timer->expires_after(
-          std::chrono::seconds(config_.shutdownTimeoutSec));
+      timer->expires_after(std::chrono::seconds(config_.shutdownTimeoutSec));
       timer->async_wait([this, timer](const std::error_code& ec) {
         if (ec)
           return;
