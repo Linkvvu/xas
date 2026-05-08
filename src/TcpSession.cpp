@@ -126,8 +126,10 @@ void TcpSession::start()
 void TcpSession::doRead()
 {
     auto self = shared_from_this();
-    socket_.async_read_some(
+    asio::async_read(
+        socket_,
         asio::dynamic_buffer(receiveBuffer_),
+        asio::transfer_at_least(1),
         asio::bind_executor(strand_,
             [self](const std::error_code& ec, std::size_t /*bytesTransferred*/) {
                 if (ec) {

@@ -42,7 +42,7 @@ private:
 
     uint64_t                    id_;
     asio::ip::tcp::socket       socket_;
-    asio::strand<asio::io_context::executor_type> strand_;
+    asio::strand<asio::any_io_executor> strand_;
     asio::steady_timer          idleTimer_;
     ServerConfig                config_;
 

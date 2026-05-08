@@ -32,7 +32,7 @@ TcpServer::TcpServer(std::string host, uint16_t port, ServerConfig config)
     // Resolve, open, bind and listen
     asio::ip::tcp::resolver resolver(ioc_);
     auto endpoints = resolver.resolve(host_, std::to_string(port_));
-    auto endpoint  = *endpoints.begin();
+    auto endpoint  = endpoints.begin()->endpoint();
 
     acceptor_.open(endpoint.protocol());
     acceptor_.set_option(asio::ip::tcp::acceptor::reuse_address(true));
