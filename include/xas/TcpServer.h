@@ -67,7 +67,6 @@ private:
 
   asio::io_context ioc_;
   asio::ip::tcp::acceptor acceptor_;
-  asio::strand<asio::io_context::executor_type> sessionStrand_;
 
   mutable std::mutex sessionsMutex_;
   std::unordered_map<uint64_t, SessionPtr> sessions_;
