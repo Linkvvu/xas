@@ -77,7 +77,6 @@ private:
   std::atomic<bool> started_{false};
   std::once_flag stopOnce_;
   std::once_flag waitOnce_;
-  std::shared_ptr<asio::steady_timer> shutdownTimer_;
 
   std::function<void(SessionPtr, Buffer&)> rawCb_;
   std::function<void(SessionPtr)> connectCb_;
