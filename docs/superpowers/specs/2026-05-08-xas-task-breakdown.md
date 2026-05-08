@@ -202,7 +202,7 @@ public:
 
 ### T2.2 include/xas/Pipeline.h + include/xas/CodecHandle.h
 
-**描述**：实现类型擦除桥接层。`Pipeline<T>` 持有用户 Codec，将原始字节 decode 为强类型消息后调用 `onMessage` 回调。`CodecHandle<T>` 是暴露给用户的公开 API。
+**描述**：实现类型桥接层。`Pipeline<Codec>` 以 Codec 具体类型为模板参数，直接持有并调用 Codec 方法（duck typing，无虚函数）。`CodecHandle<T>` 是暴露给用户的公开 API，通过 `std::function` 持有编解码能力，与 Codec 具体类型解耦。
 
 **depends_on**：T1.1, T1.2
 
@@ -216,14 +216,14 @@ include/xas/CodecHandle.h
 
 *Pipeline.h*：
 ```cpp
-template<typename T>
+// Pipeline 以 Codec 为模板参数，直接调用其方法——无基类，无虚函数
+template<typename Codec>
 class Pipeline {
+    using T = typename Codec::MessageType;
 public:
     using TypedCb = std::function<void(SessionPtr, T)>;
 
-    template<typename Codec>
-    explicit Pipeline(std::shared_ptr<Codec> codec)
-        : codec_(std::make_shared<CodecWrapper<Codec>>(std::move(codec))) {}
+    explicit Pipeline(std::shared_ptr<Codec> codec) : codec_(std::move(codec)) {}
 
     void setMessageCb(TypedCb cb) { cb_ = std::move(cb); }
 
@@ -236,49 +236,63 @@ public:
     Buffer encode(const T& msg) { return codec_->encode(msg); }
 
 private:
-    struct ICodec {
-        virtual std::optional<T> decode(Buffer&) = 0;
-        virtual Buffer encode(const T&) = 0;
-        virtual ~ICodec() = default;
-    };
-    template<typename C>
-    struct CodecWrapper : ICodec {
-        std::shared_ptr<C> impl_;
-        explicit CodecWrapper(std::shared_ptr<C> c) : impl_(std::move(c)) {}
-        std::optional<T> decode(Buffer& b) override { return impl_->decode(b); }
-        Buffer encode(const T& m) override { return impl_->encode(m); }
-    };
-    std::shared_ptr<ICodec> codec_;
+    std::shared_ptr<Codec> codec_;   // 直接持有具体类型，编译期鸭子类型检查
     TypedCb cb_;
 };
 ```
 
 *CodecHandle.h*：
 ```cpp
+// CodecHandle<T> 不知道 Codec 具体类型；通过 std::function 持有能力，
+// 在 TcpServer::setCodec() 实例化时从 Pipeline<Codec> 捕获。
 template<typename T>
 class CodecHandle {
 public:
-    explicit CodecHandle(std::shared_ptr<Pipeline<T>> pipeline)
-        : pipeline_(std::move(pipeline)) {}
+    using TypedCb = std::function<void(SessionPtr, T)>;
 
-    void onMessage(std::function<void(SessionPtr, T)> cb) {
-        pipeline_->setMessageCb(std::move(cb));
+    CodecHandle(std::function<void(TypedCb)>    registerCb,
+                std::function<Buffer(const T&)> encodeFn)
+        : registerCb_(std::move(registerCb))
+        , encode_(std::move(encodeFn)) {}
+
+    void onMessage(TypedCb cb) {
+        registerCb_(std::move(cb));
     }
 
     void sendMsg(SessionPtr sess, const T& msg) {
-        sess->send(pipeline_->encode(msg));
+        sess->send(encode_(msg));
     }
 
 private:
-    std::shared_ptr<Pipeline<T>> pipeline_;
+    std::function<void(TypedCb)>    registerCb_;
+    std::function<Buffer(const T&)> encode_;
 };
 ```
 
-- `Pipeline<T>` 为内部类型，不在公开 API 中直接暴露。
-- `TcpServer` 和 `TcpSession` 保持非模板，类型擦除完全在此层完成。
+*TcpServer::setCodec\<Codec\>() 对应实现*（在 T3.1 中完成，此处列出以说明桥接方式）：
+```cpp
+template<typename Codec>
+CodecHandle<typename Codec::MessageType> setCodec(std::shared_ptr<Codec> codec) {
+    using T = typename Codec::MessageType;
+    auto pipeline = std::make_shared<Pipeline<Codec>>(std::move(codec));
+    // 类型擦除发生在此 lambda 处，而非通过虚函数
+    rawCb_ = [pipeline](SessionPtr s, Buffer& b) { pipeline->process(s, b); };
+    return CodecHandle<T>(
+        [pipeline](std::function<void(SessionPtr, T)> cb) {
+            pipeline->setMessageCb(std::move(cb));
+        },
+        [pipeline](const T& msg) { return pipeline->encode(msg); }
+    );
+}
+```
+
+- Codec 不需要继承任何基类；编译期若缺少 `decode`/`encode`/`MessageType` 则报错。
+- 类型擦除边界为 `raw_cb_`（`std::function<void(SessionPtr, Buffer&)>`），不依赖虚函数。
+- `TcpServer` 和 `TcpSession` 保持非模板。
 
 **验收标准**：
-- 自定义 Codec（满足 duck typing 契约）可通过 `CodecHandle` 正确注册消息回调。
+- 满足 duck typing 契约的自定义 Codec 无需继承任何基类即可编译通过。
+- 缺少 `decode`/`encode`/`MessageType` 之一的 Codec 在 `setCodec()` 处产生编译错误（而非运行时错误）。
 - `sendMsg` 正确调用 `encode` 并通过 `SessionPtr::send` 发送。
 - `TcpSession` 的 `raw_cb_` 可绑定为 `[pipeline](SessionPtr s, Buffer& b){ pipeline->process(s,b); }`。
 
@@ -339,9 +353,14 @@ public:
   template<typename Codec>
   CodecHandle<typename Codec::MessageType> setCodec(std::shared_ptr<Codec> codec) {
       using T = typename Codec::MessageType;
-      auto pipeline = std::make_shared<Pipeline<T>>(std::move(codec));
+      auto pipeline = std::make_shared<Pipeline<Codec>>(std::move(codec));
       rawCb_ = [pipeline](SessionPtr s, Buffer& b) { pipeline->process(s, b); };
-      return CodecHandle<T>(pipeline);
+      return CodecHandle<T>(
+          [pipeline](std::function<void(SessionPtr, T)> cb) {
+              pipeline->setMessageCb(std::move(cb));
+          },
+          [pipeline](const T& msg) { return pipeline->encode(msg); }
+      );
   }
   ```
 
