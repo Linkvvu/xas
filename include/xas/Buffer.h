@@ -5,7 +5,7 @@
 
 namespace xas {
 
-using Buffer      = std::vector<uint8_t>;
+using Buffer = std::vector<uint8_t>;
 class TcpSession;
 using SessionPtr  = std::shared_ptr<TcpSession>;
 using WeakSession = std::weak_ptr<TcpSession>;

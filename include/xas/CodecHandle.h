@@ -1,35 +1,34 @@
 #pragma once
-#include <functional>
 #include "xas/Buffer.h"
+
+#include <functional>
 
 namespace xas {
 
 // CodecHandle<T> 不知道 Codec 的具体类型。
 // 通过两个 std::function 持有 Pipeline<Codec> 的能力，
 // 在 TcpServer::setCodec<Codec>() 实例化时从 Pipeline 捕获。
-template<typename T>
+template <typename T>
 class CodecHandle {
 public:
-    using TypedCb = std::function<void(SessionPtr, T)>;
+  using TypedCb = std::function<void(SessionPtr, T)>;
 
-    CodecHandle(std::function<void(TypedCb)>    registerCb,
-                std::function<Buffer(const T&)> encodeFn)
-        : registerCb_(std::move(registerCb))
-        , encode_(std::move(encodeFn)) {}
+  CodecHandle(std::function<void(TypedCb)> registerCb,
+              std::function<Buffer(const T&)> encodeFn)
+      : registerCb_(std::move(registerCb))
+      , encode_(std::move(encodeFn))
+  {
+  }
 
-    // 注册消息回调
-    void onMessage(TypedCb cb) {
-        registerCb_(std::move(cb));
-    }
+  // 注册消息回调
+  void onMessage(TypedCb cb) { registerCb_(std::move(cb)); }
 
-    // 编码并通过 sess 发送
-    void sendMsg(SessionPtr sess, const T& msg) {
-        sess->send(encode_(msg));
-    }
+  // 编码并通过 sess 发送
+  void sendMsg(SessionPtr sess, const T& msg) { sess->send(encode_(msg)); }
 
 private:
-    std::function<void(TypedCb)>    registerCb_;
-    std::function<Buffer(const T&)> encode_;
+  std::function<void(TypedCb)> registerCb_;
+  std::function<Buffer(const T&)> encode_;
 };
 
 } // namespace xas
