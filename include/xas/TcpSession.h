@@ -11,7 +11,10 @@
 
 namespace xas {
 
+class TcpServer;
+
 class TcpSession : public std::enable_shared_from_this<TcpSession> {
+  friend TcpServer;
 public:
   explicit TcpSession(asio::ip::tcp::socket socket, const ServerConfig& config);
 
@@ -25,6 +28,7 @@ public:
   void send(Buffer&& data);
   void close();
 
+private:
   // ── Framework-internal：由 TcpServer 在 start() 前注入 ───────────────
   void setRawCallback(std::function<void(SessionPtr, Buffer&)> cb);
   void
@@ -34,7 +38,6 @@ public:
 
   void start(); // 启动 async_read 循环和空闲定时器
 
-private:
   void doRead();
   void doWrite();
   void resetIdleTimer();

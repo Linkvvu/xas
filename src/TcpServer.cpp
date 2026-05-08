@@ -77,8 +77,12 @@ void TcpServer::onOverload(std::function<void()> cb)
 }
 
 // ── start / run / wait / stop ─────────────────────────────────────────────
-void TcpServer::start()
+bool TcpServer::start()
 {
+  bool expected = false;
+  if (!started_.compare_exchange_strong(expected, true))
+    return false;
+
   doAccept();
 
   uint32_t n = config_.threadCount > 0 ? config_.threadCount : 1;
@@ -88,12 +92,15 @@ void TcpServer::start()
   }
 
   config_.logger->info("TcpServer started with {} thread(s)", n);
+  return true;
 }
 
-void TcpServer::run()
+bool TcpServer::run()
 {
-  start();
+  if (!start())
+    return false;
   wait();
+  return true;
 }
 
 void TcpServer::wait()

@@ -47,8 +47,8 @@ public:
   }
 
   // ── 服务器控制 ────────────────────────────────────────────────────────
-  void start(); // 非阻塞：启动线程池，开始接受连接
-  void run();   // 阻塞：start() + wait()
+  bool start(); // 非阻塞：启动线程池，开始接受连接；重复调用返回 false
+  bool run();   // 阻塞：start() + wait()；重复调用返回 false
   void stop();  // 发起两阶段优雅关闭
   void wait();  // 阻塞直到完全停止
 
@@ -75,6 +75,7 @@ private:
   std::unique_ptr<asio::executor_work_guard<asio::io_context::executor_type>>
       workGuard_;
 
+  std::atomic<bool> started_{false};
   std::once_flag stopOnce_;
   std::once_flag waitOnce_;
   std::shared_ptr<asio::steady_timer> shutdownTimer_;
