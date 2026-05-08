@@ -225,19 +225,23 @@ void TcpSession::onIdleTimeout(const std::error_code& ec)
 
 void TcpSession::forceClose(std::error_code reason)
 {
-  if (!connected_)
-    return;
+  asio::dispatch(strand_,
+                 [self = shared_from_this(), reason = std::move(reason)]() {
+                   if (!self->connected_)
+                     return;
 
-  connected_ = false;
-  idleTimer_.cancel();
+                   self->connected_ = false;
+                   self->idleTimer_.cancel();
 
-  std::error_code ec;
-  socket_.shutdown(asio::ip::tcp::socket::shutdown_both, ec);
-  socket_.close(ec);
+                   std::error_code ec;
+                   self->socket_.shutdown(asio::ip::tcp::socket::shutdown_both,
+                                          ec);
+                   self->socket_.close(ec);
 
-  if (disconnectCb_) {
-    disconnectCb_(shared_from_this(), reason);
-  }
+                   if (self->disconnectCb_) {
+                     self->disconnectCb_(self->shared_from_this(), reason);
+                   }
+                 });
 }
 
 } // namespace xas

@@ -136,8 +136,13 @@ void TcpServer::stop()
       std::vector<SessionPtr> snapshot;
       {
         std::lock_guard<std::mutex> lk(sessionsMutex_);
+        if (sessions_.empty()) {
+          workGuard_.reset();
+          return;
+        }
+
         snapshot.reserve(sessions_.size());
-        for (auto& [id, sess] : sessions_) {
+        for (const auto& [_, sess] : sessions_) {
           snapshot.push_back(sess);
         }
       }
@@ -146,16 +151,12 @@ void TcpServer::stop()
         sess->close();
       }
 
-      // If all sessions already drained (e.g. clients disconnected before
-      // stop() was called), skip the timer entirely.
-      {
-        std::lock_guard<std::mutex> lk(sessionsMutex_);
-        if (sessions_.empty()) {
-          // Phase 3: release work guard so ioc_.run() can exit.
-          workGuard_.reset();
-          return;
-        }
-      }
+      // All session close() handlers have been posted to ioc_. Now reset the
+      // work guard so io_context::run() can eventually exit once those handlers
+      // drain. The shutdown timer below serves as a safety net: if sessions
+      // don't close within the timeout, it will force-close any still-connected
+      // ones.
+      workGuard_.reset();
 
       // Arm the shutdown timer; cancelled early if all sessions drain first.
       auto timer = std::make_shared<asio::steady_timer>(ioc_);
@@ -166,11 +167,9 @@ void TcpServer::stop()
         std::lock_guard<std::mutex> lk(sessionsMutex_);
         for (auto& [id, sess] : sessions_) {
           if (sess->isConnected()) {
-            sess->close();
+            sess->forceClose({});
           }
         }
-        // Phase 3: always release work guard after timer fires.
-        workGuard_.reset();
       });
     });
   });
