@@ -69,7 +69,10 @@ private:
   asio::ip::tcp::acceptor acceptor_;
 
   mutable std::mutex sessionsMutex_;
+  std::optional<size_t> aliveCnt_;
+  asio::steady_timer shutdownTimer_;
   std::unordered_map<uint64_t, SessionPtr> sessions_;
+
   std::vector<std::thread> threads_;
   std::unique_ptr<asio::executor_work_guard<asio::io_context::executor_type>>
       workGuard_;

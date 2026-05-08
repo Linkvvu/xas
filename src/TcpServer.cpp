@@ -12,6 +12,7 @@ TcpServer::TcpServer(std::string host, uint16_t port, ServerConfig config)
     , config_(std::move(config))
     , ioc_()
     , acceptor_(ioc_)
+    , shutdownTimer_(ioc_)
 {
   // Default logger setup
   if (!config_.logger) {
@@ -141,6 +142,23 @@ void TcpServer::stop()
           return;
         }
 
+        // Arm the shutdown timer; cancelled early if all sessions drain first.
+        aliveCnt_ = sessions_.size();
+        shutdownTimer_.expires_after(
+            std::chrono::seconds(config_.shutdownTimeoutSec));
+        shutdownTimer_.async_wait([this](const std::error_code& ec) {
+          if (ec) {
+            return;
+          }
+
+          std::lock_guard<std::mutex> lk(sessionsMutex_);
+          for (auto& [id, sess] : sessions_) {
+            if (sess->isConnected()) {
+              sess->forceClose({});
+            }
+          }
+        });
+
         snapshot.reserve(sessions_.size());
         for (const auto& [_, sess] : sessions_) {
           snapshot.push_back(sess);
@@ -151,26 +169,7 @@ void TcpServer::stop()
         sess->close();
       }
 
-      // All session close() handlers have been posted to ioc_. Now reset the
-      // work guard so io_context::run() can eventually exit once those handlers
-      // drain. The shutdown timer below serves as a safety net: if sessions
-      // don't close within the timeout, it will force-close any still-connected
-      // ones.
       workGuard_.reset();
-
-      // Arm the shutdown timer; cancelled early if all sessions drain first.
-      auto timer = std::make_shared<asio::steady_timer>(ioc_);
-      timer->expires_after(std::chrono::seconds(config_.shutdownTimeoutSec));
-      timer->async_wait([this, timer](const std::error_code& ec) {
-        if (ec)
-          return;
-        std::lock_guard<std::mutex> lk(sessionsMutex_);
-        for (auto& [id, sess] : sessions_) {
-          if (sess->isConnected()) {
-            sess->forceClose({});
-          }
-        }
-      });
     });
   });
 }
@@ -253,6 +252,11 @@ void TcpServer::removeSession(uint64_t id)
 {
   std::lock_guard<std::mutex> lk(sessionsMutex_);
   sessions_.erase(id);
+
+  if (aliveCnt_ && (*aliveCnt_)-- == 1) {
+    std::error_code ec;
+    shutdownTimer_.cancel(ec);
+  }
 }
 
 SessionPtr TcpServer::getSession(uint64_t id)
