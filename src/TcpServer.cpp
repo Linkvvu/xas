@@ -135,12 +135,19 @@ void TcpServer::stop()
                 sess->close();
             }
 
-            // Force-close anything still connected after the timeout.
-            auto timer = std::make_shared<asio::steady_timer>(ioc_);
-            timer->expires_after(
+            // If all sessions already drained (e.g. clients disconnected before
+            // stop() was called), skip the timer entirely.
+            {
+                std::lock_guard<std::mutex> lk(sessionsMutex_);
+                if (sessions_.empty()) return;
+            }
+
+            // Arm the shutdown timer; cancelled early if all sessions drain first.
+            shutdownTimer_ = std::make_shared<asio::steady_timer>(ioc_);
+            shutdownTimer_->expires_after(
                 std::chrono::seconds(config_.shutdownTimeoutSec));
-            timer->async_wait([this, timer](const std::error_code& ec) {
-                if (ec) return; // cancelled – shouldn't happen here
+            shutdownTimer_->async_wait([this](const std::error_code& ec) {
+                if (ec) return;
                 asio::post(sessionStrand_, [this] {
                     std::lock_guard<std::mutex> lk(sessionsMutex_);
                     for (auto& [id, sess] : sessions_) {
@@ -229,6 +236,9 @@ void TcpServer::removeSession(uint64_t id)
 {
     std::lock_guard<std::mutex> lk(sessionsMutex_);
     sessions_.erase(id);
+    if (sessions_.empty() && shutdownTimer_) {
+        shutdownTimer_->cancel();
+    }
 }
 
 SessionPtr TcpServer::getSession(uint64_t id)
