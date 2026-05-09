@@ -18,7 +18,7 @@ Draft — awaiting approval
 
 ### 1. xas_errc 枚举
 
-所有 xas 框架错误码集中在一个枚举：
+所有 xas 框架错误码集中在一个枚举，位于 `include/xas/error.h`：
 
 ```cpp
 namespace xas {
@@ -161,10 +161,12 @@ tl::expected<xas::Buffer, std::error_code> decode(xas::Buffer& buf) {
 
 | File | Change |
 |------|--------|
-| `include/xas/xas.h` | 新增 `xas_errc` 枚举、`xas_category`、`make_error_code(xas_errc)` |
+| `include/xas/error.h` | 新建 — `xas_errc` 枚举、`xas_category`、`make_error_code(xas_errc)` |
+| `include/xas/xas.h` | 改为 `#include "xas/error.h"` 再包含其他模块 |
 | `include/xas/Pipeline.h` | `process()` 改为使用 `tl::expected`，`invalid_format` 时触发 onError 后调用 `sess->forceClose(ec)` |
 | `include/xas/CodecHandle.h` | 无需修改（仅传递 typed callback） |
-| `include/xas/TcpServer.h` | 无需修改（`errorCb_` 已存在） |
+| `include/xas/TcpServer.h` | 添加 `<optional>`（移除 Pipeline.h 的 transitive include 后需要） |
+| `include/xas/TcpSession.h` | 添加 `template<typename> friend class Pipeline;`（让 Pipeline 访问 forceClose） |
 | `examples/echo/main.cpp` | EchoCodec 迁移到新接口 |
 | `tests/TestEcho.cpp` | EchoCodec 迁移到新接口 |
 
