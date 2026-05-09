@@ -53,12 +53,19 @@ public:
         auto it = routes_.find(key);
         if (it != routes_.end()) {
           it->second(sess, std::move(*result));
-        } else if (defaultCb_) {
-          defaultCb_(sess, std::move(*result));
         } else {
           cb_(sess, std::move(*result));
         }
+      } else if (defaultCb_) {
+        uint16_t key = MessageCmd<T>::extract(*result);
+        auto it = routes_.find(key);
+        if (it != routes_.end()) {
+          it->second(sess, std::move(*result));
+        } else {
+          defaultCb_(sess, std::move(*result));
+        }
       }
+      // cb_ 和 defaultCb_ 都为空 → 静默丢弃
     }
   }
 
