@@ -12,9 +12,12 @@
 namespace xas {
 
 class TcpServer;
+template <typename> class Pipeline;
 
 class TcpSession : public std::enable_shared_from_this<TcpSession> {
   friend TcpServer;
+  template <typename>
+  friend class Pipeline;
 public:
   explicit TcpSession(asio::ip::tcp::socket socket, const ServerConfig& config);
 
