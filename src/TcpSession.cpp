@@ -138,7 +138,17 @@ void TcpSession::doRead()
           strand_,
           [self](const std::error_code& ec, std::size_t /*bytesTransferred*/) {
             if (ec) {
-              self->forceClose(ec);
+              if (ec == asio::error::eof) {
+                // EOF：缓冲区数据完整，先 flush 再关闭
+                if (self->rawCb_) {
+                  self->rawCb_(self->shared_from_this(), self->receiveBuffer_);
+                }
+                self->forceClose(ec);
+              } else if (ec != asio::error::operation_aborted) {
+                // operation_aborted：直接 return，不重复关闭
+                // 其他错误：立即关闭
+                self->forceClose(ec);
+              }
               return;
             }
 
