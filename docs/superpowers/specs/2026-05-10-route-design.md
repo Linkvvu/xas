@@ -63,12 +63,49 @@ pipeline.routeDefault([](xas::SessionPtr sess, Request req) {
 | cmd 未命中，有 default | 调用 default handler |
 | cmd 未命中，无 default | 静默丢弃该消息 |
 
+## cmd 字段提取机制
+
+使用 `MessageCmd<T>` trait 提取 `cmd`，默认假设消息类型有 `.cmd` 成员：
+
+```cpp
+// include/xas/MessageTrait.h
+namespace xas {
+
+template<typename T>
+struct MessageCmd {
+    static uint16_t extract(const T& msg) { return msg.cmd; }
+};
+
+} // namespace xas
+```
+
+Pipeline 内使用：
+```cpp
+uint16_t key = MessageCmd<T>::extract(*msg);
+```
+
+**特例化示例**（消息类型无 `.cmd` 字段时）：
+
+```cpp
+struct RawPacket {
+    uint8_t  type;   // 用 type 字段
+    uint32_t payload;
+};
+
+template<>
+struct xas::MessageCmd<RawPacket> {
+    static uint16_t extract(const RawPacket& msg) { return msg.type; }
+};
+```
+
 ## 文件变更
 
 | 文件 | 变更 |
 |------|------|
+| `include/xas/MessageTrait.h` | 新增 `MessageCmd<T>` trait |
 | `include/xas/Pipeline.h` | 新增 `routes_`, `defaultCb_`, `route()`, `routeDefault()`，修改 `process()` |
 | `include/xas/CodecHandle.h` | 透传 `route()` / `routeDefault()` 到 Pipeline |
+| `include/xas/xas.h` | 新增 `#include "xas/MessageTrait.h"` |
 | `DESIGN.md` | 新增 Route 模块章节 |
 | `tests/TestEcho.cpp` | 补充路由测试 |
 
@@ -78,3 +115,4 @@ pipeline.routeDefault([](xas::SessionPtr sess, Request req) {
 2. cmd 未命中且无 default → 无崩溃，静默丢弃
 3. cmd 未命中但有 default → 调用 default
 4. `routeDefault` 覆盖后生效
+5. 消息无 `.cmd` 字段 → 通过 `MessageCmd` 特例化提取
