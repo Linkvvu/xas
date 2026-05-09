@@ -14,14 +14,28 @@ public:
   using TypedCb = std::function<void(SessionPtr, T)>;
 
   CodecHandle(std::function<void(TypedCb)> registerCb,
-              std::function<Buffer(const T&)> encodeFn)
+              std::function<Buffer(const T&)> encodeFn,
+              std::function<void(uint16_t, TypedCb)> routeCb = nullptr,
+              std::function<void(TypedCb)> routeDefaultCb = nullptr)
       : registerCb_(std::move(registerCb))
       , encode_(std::move(encodeFn))
+      , routeCb_(std::move(routeCb))
+      , routeDefaultCb_(std::move(routeDefaultCb))
   {
   }
 
   // 注册消息回调
   void onMessage(TypedCb cb) { registerCb_(std::move(cb)); }
+
+  // 注册路由
+  void route(uint16_t cmd, TypedCb cb) {
+    if (routeCb_) routeCb_(cmd, std::move(cb));
+  }
+
+  // 注册默认路由
+  void routeDefault(TypedCb cb) {
+    if (routeDefaultCb_) routeDefaultCb_(std::move(cb));
+  }
 
   // 编码并通过 sess 发送
   void sendMsg(SessionPtr sess, const T& msg) { sess->send(encode_(msg)); }
@@ -29,6 +43,8 @@ public:
 private:
   std::function<void(TypedCb)> registerCb_;
   std::function<Buffer(const T&)> encode_;
+  std::function<void(uint16_t, TypedCb)> routeCb_;
+  std::function<void(TypedCb)> routeDefaultCb_;
 };
 
 } // namespace xas
