@@ -45,7 +45,13 @@ public:
         [pipeline](std::function<void(SessionPtr, T)> cb) {
           pipeline->setMessageCb(std::move(cb));
         },
-        [pipeline](const T& msg) { return pipeline->encode(msg); });
+        [pipeline](const T& msg) { return pipeline->encode(msg); },
+        [wp = std::weak_ptr(pipeline)](uint16_t cmd, auto cb) {
+          if (auto p = wp.lock()) p->route(cmd, std::move(cb));
+        },
+        [wp = std::weak_ptr(pipeline)](auto cb) {
+          if (auto p = wp.lock()) p->routeDefault(std::move(cb));
+        });
   }
 
   // ── 服务器控制 ────────────────────────────────────────────────────────
