@@ -1,8 +1,10 @@
 #pragma once
 #include "xas/Buffer.h"
+#include "xas/MessageTrait.h"
 #include "xas/error.h"
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <tl/expected.hpp>
 
@@ -27,6 +29,10 @@ public:
     errorCb_ = std::move(cb);
   }
 
+  // 新增 route 方法
+  void route(uint16_t cmd, TypedCb cb) { routes_[cmd] = std::move(cb); }
+  void routeDefault(TypedCb cb) { defaultCb_ = std::move(cb); }
+
   // 由 TcpSession 的 raw_cb_ 调用
   void process(SessionPtr sess, Buffer& buf)
   {
@@ -42,7 +48,17 @@ public:
         sess->forceClose(ec);
         return;
       }
-      if (cb_) cb_(sess, std::move(*result));
+      if (cb_) {
+        uint16_t key = MessageCmd<T>::extract(*result);
+        auto it = routes_.find(key);
+        if (it != routes_.end()) {
+          it->second(sess, std::move(*result));
+        } else if (defaultCb_) {
+          defaultCb_(sess, std::move(*result));
+        } else {
+          cb_(sess, std::move(*result));
+        }
+      }
     }
   }
 
@@ -52,6 +68,8 @@ private:
   std::shared_ptr<Codec> codec_;
   TypedCb cb_;
   std::function<void(SessionPtr, std::error_code)> errorCb_;
+  std::map<uint16_t, TypedCb> routes_;
+  TypedCb defaultCb_;
 };
 
 } // namespace xas
