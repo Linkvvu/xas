@@ -1,6 +1,5 @@
 #include "xas/xas.h"
 
-#include <optional>
 #include <spdlog/spdlog.h>
 
 // ---------------------------------------------------------------------------
@@ -10,10 +9,10 @@
 struct EchoCodec {
   using MessageType = xas::Buffer;
 
-  std::optional<xas::Buffer> decode(xas::Buffer& buf)
+  tl::expected<xas::Buffer, std::error_code> decode(xas::Buffer& buf)
   {
     if (buf.empty())
-      return std::nullopt;
+      return tl::unexpected(xas::make_error_code(xas::xas_errc::incomplete_data));
     xas::Buffer msg = std::move(buf);
     buf.clear();
     return msg;
