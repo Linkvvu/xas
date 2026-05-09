@@ -98,6 +98,14 @@ struct Codec {
 ## Pipeline::process Implementation
 
 ```cpp
+// Pipeline.h 新增成员
+std::function<void(SessionPtr, std::error_code)> errorCb_;
+
+public:
+void setErrorCb(std::function<void(SessionPtr, std::error_code)> cb) {
+  errorCb_ = std::move(cb);
+}
+
 void process(SessionPtr sess, Buffer& buf)
 {
   while (true) {
@@ -108,8 +116,9 @@ void process(SessionPtr sess, Buffer& buf)
         // 数据不完整，退出循环，等更多数据
         return;
       }
-      // 无效格式 → 触发 onError
+      // 无效格式 → 先触发 onError（供用户记录），再强制关闭 session
       if (errorCb_) errorCb_(sess, ec);
+      sess->forceClose(ec);
       return;
     }
     if (cb_) cb_(sess, std::move(*result));
@@ -153,9 +162,9 @@ tl::expected<xas::Buffer, std::error_code> decode(xas::Buffer& buf) {
 | File | Change |
 |------|--------|
 | `include/xas/xas.h` | 新增 `xas_errc` 枚举、`xas_category`、`make_error_code(xas_errc)` |
-| `include/xas/Pipeline.h` | `process()` 改为使用 `tl::expected`，触发 `onError` |
+| `include/xas/Pipeline.h` | `process()` 改为使用 `tl::expected`，`invalid_format` 时触发 onError 后调用 `sess->forceClose(ec)` |
 | `include/xas/CodecHandle.h` | 无需修改（仅传递 typed callback） |
-| `include/xas/TcpServer.h` | `errorCb_` 类型已正确 |
+| `include/xas/TcpServer.h` | 无需修改（`errorCb_` 已存在） |
 | `examples/echo/main.cpp` | EchoCodec 迁移到新接口 |
 | `tests/TestEcho.cpp` | EchoCodec 迁移到新接口 |
 
