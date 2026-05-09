@@ -39,6 +39,7 @@ public:
     using T       = typename Codec::MessageType;
     auto pipeline = std::make_shared<Pipeline<Codec>>(std::move(codec));
     rawCb_ = [pipeline](SessionPtr s, Buffer& b) { pipeline->process(s, b); };
+    pipeline->setErrorCb(errorCb_);
     return CodecHandle<T>(
         [pipeline](std::function<void(SessionPtr, T)> cb) {
           pipeline->setMessageCb(std::move(cb));
