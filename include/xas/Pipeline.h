@@ -4,6 +4,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <system_error>
+#include <tl/expected.hpp>
 
 namespace xas {
 
@@ -22,12 +24,26 @@ public:
 
   void setMessageCb(TypedCb cb) { cb_ = std::move(cb); }
 
+  void setErrorCb(std::function<void(SessionPtr, std::error_code)> cb) {
+    errorCb_ = std::move(cb);
+  }
+
   // 由 TcpSession 的 raw_cb_ 调用
   void process(SessionPtr sess, Buffer& buf)
   {
-    while (auto msg = codec_->decode(buf)) {
-      if (cb_)
-        cb_(sess, std::move(*msg));
+    while (true) {
+      auto result = codec_->decode(buf);
+      if (!result) {
+        const auto& ec = result.error();
+        if (ec == make_error_code(xas_errc::incomplete_data)) {
+          return; // 数据不完整，等更多数据
+        }
+        // 无效格式 → 先触发 onError，再强制关闭 session
+        if (errorCb_) errorCb_(sess, ec);
+        sess->forceClose(ec);
+        return;
+      }
+      if (cb_) cb_(sess, std::move(*result));
     }
   }
 
@@ -36,6 +52,7 @@ public:
 private:
   std::shared_ptr<Codec> codec_;
   TypedCb cb_;
+  std::function<void(SessionPtr, std::error_code)> errorCb_;
 };
 
 } // namespace xas
