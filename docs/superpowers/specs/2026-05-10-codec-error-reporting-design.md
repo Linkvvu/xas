@@ -99,7 +99,7 @@ struct Codec {
 
 ```cpp
 // Pipeline.h 新增成员
-std::function<void(SessionPtr, std::error_code)> errorCb_;
+std::function<void(SessionPtr, std::error_code)> errorCb_;;
 
 public:
 void setErrorCb(std::function<void(SessionPtr, std::error_code)> cb) {
