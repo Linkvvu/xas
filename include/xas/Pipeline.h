@@ -1,10 +1,9 @@
 #pragma once
 #include "xas/Buffer.h"
+#include "xas/error.h"
 
 #include <functional>
 #include <memory>
-#include <optional>
-#include <system_error>
 #include <tl/expected.hpp>
 
 namespace xas {
