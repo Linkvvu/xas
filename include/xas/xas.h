@@ -2,6 +2,7 @@
 #include "xas/Buffer.h"
 #include "xas/CodecHandle.h"
 #include "xas/error.h"
+#include "xas/MessageTrait.h"
 #include "xas/Pipeline.h"
 #include "xas/ServerConfig.h"
 #include "xas/TcpServer.h"
