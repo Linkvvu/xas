@@ -42,9 +42,6 @@ public:
     rawCb_ = [pipeline](SessionPtr s, Buffer& b) { pipeline->process(s, b); };
     pipeline->setErrorCb(errorCb_);
     return CodecHandle<T>(
-        [pipeline](std::function<void(SessionPtr, T)> cb) {
-          pipeline->setMessageCb(std::move(cb));
-        },
         [pipeline](const T& msg) { return pipeline->encode(msg); },
         [wp = std::weak_ptr(pipeline)](uint16_t cmd, auto cb) {
           if (auto p = wp.lock()) p->route(cmd, std::move(cb));
