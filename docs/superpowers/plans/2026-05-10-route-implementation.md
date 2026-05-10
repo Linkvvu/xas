@@ -2,12 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 为 xas 框架添加静态路由能力，按消息内 `cmd` 字段分发到不同 handler
+**Goal:** Add static route capability to xas framework - dispatch messages to different handlers based on internal `cmd` field
 
 **Architecture:**
-- `MessageCmd<T>` trait 提供 cmd 字段提取接口，默认取 `msg.cmd`
-- `Pipeline<Codec>` 持有路由表 `routes_` 和 `defaultCb_`，`process()` 内做路由分发
-- `CodecHandle<T>` 透传 `route()` / `routeDefault()` 到 Pipeline
+- `MessageCmd<T>` trait provides cmd field extraction, defaults to `msg.cmd`
+- `Pipeline<Codec>` holds `routes_` map and `defaultCb_`, dispatches in `process()`
+- `CodecHandle<T>` forwards `route()` / `routeDefault()` to Pipeline
+- `onMessage` is REMOVED - all message handling must go through `route()` or `routeDefault()`
 
 **Tech Stack:** C++17, ASIO, tl::expected, GoogleTest
 
@@ -15,13 +16,13 @@
 
 ## File Map
 
-| 文件 | 职责 |
-|------|------|
-| `include/xas/MessageTrait.h` | 新增：`MessageCmd<T>` trait 定义 |
-| `include/xas/Pipeline.h` | 修改：新增 `routes_`, `defaultCb_`, `route()`, `routeDefault()`，修改 `process()` |
-| `include/xas/CodecHandle.h` | 修改：新增 route 注册回调存储和 `route()`/`routeDefault()` 方法 |
-| `include/xas/xas.h` | 修改：新增 `#include "xas/MessageTrait.h"` |
-| `tests/TestEcho.cpp` | 修改：补充 Request codec 和路由测试用例 |
+| File | Responsibility |
+|------|----------------|
+| `include/xas/MessageTrait.h` | New: `MessageCmd<T>` trait |
+| `include/xas/Pipeline.h` | Modify: add `routes_`, `defaultCb_`, `route()`, `routeDefault()`; remove `cb_`/`setMessageCb`; modify `process()` |
+| `include/xas/CodecHandle.h` | Modify: add route storage and `route()`/`routeDefault()` methods; remove `onMessage` |
+| `include/xas/xas.h` | Done: already includes `MessageTrait.h` |
+| `tests/TestEcho.cpp` | Modify: add Request codec and route tests |
 
 ---
 
@@ -32,14 +33,14 @@
 **Files:**
 - Create: `include/xas/MessageTrait.h`
 
-- [ ] **Step 1: 创建 MessageTrait.h**
+- [ ] **Step 1: Create MessageTrait.h**
 
 ```cpp
 #pragma once
 
 namespace xas {
 
-// 默认 trait：假设消息类型有 .cmd 成员（uint16_t）
+// Default trait: assumes message type has .cmd member (uint16_t)
 template<typename T>
 struct MessageCmd {
     static uint16_t extract(const T& msg) { return msg.cmd; }
@@ -57,35 +58,37 @@ git commit -m "feat: add MessageCmd trait for route key extraction"
 
 ---
 
-### Task 2: Pipeline.h 路由能力
+### Task 2: Pipeline.h - remove cb_, add route
 
 **Files:**
-- Modify: `include/xas/Pipeline.h`（新增 route 相关成员和方法，修改 `process()`）
+- Modify: `include/xas/Pipeline.h`
 
-- [ ] **Step 1: 添加路由成员和方法**
-
-在 Pipeline 类中添加：
-
+**Current state (already has route logic with cb_ fallback):**
 ```cpp
-// 新增成员变量（在现有成员之后）
-std::map<uint16_t, TypedCb> routes_;
-TypedCb defaultCb_;
-
-// 新增 public 方法
+void setMessageCb(TypedCb cb) { cb_ = std::move(cb); }
 void route(uint16_t cmd, TypedCb cb) { routes_[cmd] = std::move(cb); }
 void routeDefault(TypedCb cb) { defaultCb_ = std::move(cb); }
 ```
 
-- [ ] **Step 2: 修改 process() 方法**
+**Target state: REMOVE setMessageCb and cb_ entirely**
 
-将 `process()` 内最后一行：
+- [ ] **Step 1: Remove `setMessageCb` and `cb_`**
+
+Remove from class:
 ```cpp
-if (cb_) cb_(sess, std::move(*result));
+void setMessageCb(TypedCb cb) { cb_ = std::move(cb); }  // REMOVE
 ```
 
-替换为（先路由分发，未命中再调用 onMessage）：
-
+Remove from private members:
 ```cpp
+TypedCb cb_;  // REMOVE
+```
+
+- [ ] **Step 2: Modify process() - remove cb_ fallback**
+
+Replace the current route dispatch logic:
+```cpp
+// OLD (has cb_ fallback):
 if (cb_) {
     uint16_t key = MessageCmd<T>::extract(*result);
     auto it = routes_.find(key);
@@ -94,39 +97,56 @@ if (cb_) {
     } else if (defaultCb_) {
         defaultCb_(sess, std::move(*result));
     } else {
-        cb_(sess, std::move(*result));
+        cb_(sess, std::move(*result));  // cb_ fallback - REMOVE
     }
 }
+
+// NEW (no cb_ fallback):
+uint16_t key = MessageCmd<T>::extract(*result);
+auto it = routes_.find(key);
+if (it != routes_.end()) {
+    it->second(sess, std::move(*result));
+} else if (defaultCb_) {
+    defaultCb_(sess, std::move(*result));
+}
+// else: silent drop
 ```
 
-注意：`MessageCmd<T>` 需要 include MessageTrait.h（通过 xas.h 间接引入即可，Pipeline.h 已经通过其他头引入足够内容）
+Note: `process()` now always does route dispatch - no cb_ needed.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add include/xas/Pipeline.h
-git commit -m "feat: add route capability to Pipeline"
+git commit -m "feat: remove cb_ from Pipeline, route is the only dispatch path"
 ```
 
 ---
 
-### Task 3: CodecHandle.h 路由透传
+### Task 3: CodecHandle.h - remove onMessage, add route
 
 **Files:**
-- Modify: `include/xas/CodecHandle.h`（新增 route 注册回调和透传方法）
+- Modify: `include/xas/CodecHandle.h`
 
-- [ ] **Step 1: 添加 route 存储和构造函数参数**
+**Current state (has onMessage):**
+```cpp
+void onMessage(TypedCb cb) { registerCb_(std::move(cb)); }
+```
 
-将 `CodecHandle` 构造函数修改为接受额外参数：
+**Target state: REMOVE onMessage, add route() and routeDefault()**
+
+- [ ] **Step 1: Add route storage to constructor**
+
+Current constructor takes `registerCb` for onMessage. Modify:
 
 ```cpp
 CodecHandle(
-    std::function<void(TypedCb)> registerCb,       // 原有的 onMessage 注册
-    std::function<Buffer(const T&)> encodeFn,      // 原有的 encode
-    std::function<void(uint16_t, TypedCb)> routeCb = nullptr,  // 新增：route 注册
-    std::function<void(TypedCb)> routeDefaultCb = nullptr     // 新增：default 注册
+    std::function<void(TypedCb)> registerCb,       // REMOVE - was for onMessage
+    std::function<Buffer(const T&)> encodeFn,      // keep
+    std::function<void(uint16_t, TypedCb)> routeCb = nullptr,  // NEW
+    std::function<void(TypedCb)> routeDefaultCb = nullptr     // NEW
 )
-    : registerCb_(std::move(registerCb))
+    : registerCb_(std::move(registerCb))           // REMOVE from init list
     , encode_(std::move(encodeFn))
     , routeCb_(std::move(routeCb))
     , routeDefaultCb_(std::move(routeDefaultCb))
@@ -134,22 +154,32 @@ CodecHandle(
 }
 ```
 
-- [ ] **Step 2: 添加 route() 和 routeDefault() 方法**
+- [ ] **Step 2: Remove onMessage, add route() and routeDefault()**
 
+Remove:
 ```cpp
-// 注册路由
+void onMessage(TypedCb cb) { registerCb_(std::move(cb)); }  // REMOVE
+```
+
+Add:
+```cpp
 void route(uint16_t cmd, TypedCb cb) {
     if (routeCb_) routeCb_(cmd, std::move(cb));
 }
 
-// 注册默认路由
 void routeDefault(TypedCb cb) {
     if (routeDefaultCb_) routeDefaultCb_(std::move(cb));
 }
 ```
 
-- [ ] **Step 3: 添加私有成员**
+- [ ] **Step 3: Remove registerCb_ and add route members**
 
+Remove from private:
+```cpp
+std::function<void(TypedCb)> registerCb_;  // REMOVE
+```
+
+Add to private:
 ```cpp
 std::function<void(uint16_t, TypedCb)> routeCb_;
 std::function<void(TypedCb)> routeDefaultCb_;
@@ -159,70 +189,64 @@ std::function<void(TypedCb)> routeDefaultCb_;
 
 ```bash
 git add include/xas/CodecHandle.h
-git commit -m "feat: add route methods to CodecHandle"
+git commit -m "feat: remove onMessage from CodecHandle, add route methods"
 ```
 
 ---
 
-### Task 4: TcpServer.h 构造参数调整
+### Task 4: TcpServer.h - wire route callbacks
 
 **Files:**
-- Modify: `include/xas/TcpServer.h`（调整 setCodec 返回的 CodecHandle 构造）
+- Modify: `include/xas/TcpServer.h`
 
-需要查看 setCodec 实现确认如何传递 routeCb_。先读文件确认当前实现。
-
-- [ ] **Step 1: 读取 TcpServer.h 中的 setCodec 实现**
+- [ ] **Step 1: Read current setCodec implementation**
 
 ```bash
-cat include/xas/TcpServer.h | grep -A 20 "setCodec"
+cat include/xas/TcpServer.h
 ```
 
-- [ ] **Step 2: 确认后修改 setCodec 内 CodecHandle 构造，传入 routeCb 和 routeDefaultCb**
+- [ ] **Step 2: Modify setCodec to pass routeCb and routeDefaultCb to CodecHandle**
 
-需要在 setCodec 内创建 Pipeline 时，同时获取它的 route 方法绑定。
+Need to bind Pipeline's route methods when constructing CodecHandle:
+
+```cpp
+template<typename Codec>
+CodecHandle<typename Codec::MessageType> setCodec(std::shared_ptr<Codec> codec) {
+    auto pipeline = std::make_shared<Pipeline<Codec>>(std::move(codec));
+
+    return CodecHandle<typename Codec::MessageType>(
+        [pipeline](auto&& cb) { pipeline->setMessageCb(std::move(cb)); },  // REMOVE THIS
+        [pipeline](const auto& msg) { return pipeline->encode(msg); },
+        [pipeline](uint16_t cmd, auto&& cb) { pipeline->route(cmd, std::move(cb)); },      // NEW
+        [pipeline](auto&& cb) { pipeline->routeDefault(std::move(cb)); }   // NEW
+    );
+}
+```
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add include/xas/TcpServer.h
-git commit -m "feat: wire route callbacks into CodecHandle in setCodec"
+git commit -m "feat: wire route callbacks in setCodec"
 ```
 
 ---
 
-### Task 5: xas.h 引入 MessageTrait
+### Task 5: xas.h (ALREADY DONE)
 
-**Files:**
-- Modify: `include/xas/xas.h`
-
-- [ ] **Step 1: 添加 include**
-
-在 `#include "xas/Pipeline.h"` 前或后添加：
-
-```cpp
-#include "xas/MessageTrait.h"
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add include/xas/xas.h
-git commit -m "feat: include MessageTrait.h in xas.h"
-```
+- [x] Already includes `#include "xas/MessageTrait.h"`
 
 ---
 
-### Task 6: 测试用例
+### Task 6: Tests
 
 **Files:**
 - Modify: `tests/TestEcho.cpp`
 
-- [ ] **Step 1: 添加 Request codec 和路由测试**
-
-在现有测试基础上添加新测试用例 `TEST_F(TcpServerTest, RouteByCommand)`：
+- [ ] **Step 1: Add Request codec**
 
 ```cpp
-// Request codec：每条消息带 uint16_t cmd 头
+// Request codec: each message has uint16_t cmd header
 struct Request {
     uint16_t cmd;
     xas::Buffer payload;
@@ -250,46 +274,91 @@ struct RequestCodec {
         return out;
     }
 };
-
-// 测试场景：
-// 1. cmd=1 handler 收到 cmd=1 → OK
-// 2. cmd=2 handler 收到 cmd=1 → 不应触发
-// 3. 发送 cmd=999，无 default handler → 静默丢弃
-// 4. 发送 cmd=2，有 default handler → 触发 default
 ```
 
-测试框架参考现有 TestEcho 的 ConnectThenEcho 测试结构。
+- [ ] **Step 2: Add route test cases**
 
-- [ ] **Step 2: 运行测试验证**
+```cpp
+TEST_F(TcpServerTest, RouteByCommand) {
+    auto port = getAvailablePort();
+    xas::TcpServer server("127.0.0.1", port);
+
+    std::atomic<int> cmd1Count{0};
+    std::atomic<int> cmd2Count{0};
+    std::atomic<int> defaultCount{0};
+
+    auto pipeline = server.setCodec(std::make_shared<RequestCodec>());
+
+    pipeline.route(1, [&cmd1Count](xas::SessionPtr, Request req) {
+        cmd1Count++;
+    });
+
+    pipeline.route(2, [&cmd2Count](xas::SessionPtr, Request req) {
+        cmd2Count++;
+    });
+
+    pipeline.routeDefault([&defaultCount](xas::SessionPtr, Request req) {
+        defaultCount++;
+    });
+
+    server.start();
+
+    // Send cmd=1
+    SyncClient c1;
+    c1.connect(port);
+    Request r1{1, {'a'}};
+    c1.write(pipeline.sendMsg(r1));  // Need helper or use encode directly
+    c1.close();
+
+    // Send cmd=999 (hits default)
+    SyncClient c2;
+    c2.connect(port);
+    Request r2{999, {'b'}};
+    c2.write(pipeline.sendMsg(r2));
+    c2.close();
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    server.stop();
+
+    EXPECT_EQ(cmd1Count, 1);
+    EXPECT_EQ(cmd2Count, 0);
+    EXPECT_EQ(defaultCount, 1);
+}
+```
+
+Note: `sendMsg` needs to be accessible - may need to expose `pipeline.encode()` or use `server.setCodec()` return differently.
+
+- [ ] **Step 3: Run tests**
 
 ```bash
 cd build && cmake --build . --config Debug
 ctest -C Debug -V --output-on-failure
 ```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add tests/TestEcho.cpp
-git commit -m "test: add route tests with Request codec"
+git commit -m "test: add route tests with RequestCodec"
 ```
 
 ---
 
 ## Spec Coverage Check
 
-- [x] 按消息内容（cmd 字段）路由 ✓
-- [x] 静态注册 ✓
-- [x] MessageCmd trait + 默认假设 .cmd ✓
-- [x] 特例化支持 ✓
-- [x] default handler ✓
-- [x] 静默丢弃未匹配消息 ✓
+- [x] Route by message content (cmd field) - `MessageCmd<T>` trait
+- [x] Static registration - `route()` at startup
+- [x] `MessageCmd` trait + default `.cmd` member assumption
+- [x] Specialization support via template specialization
+- [x] `defaultCb_` as catch-all
+- [x] Silent drop for unmatched cmd without default
+- [x] `onMessage` REMOVED - route is only dispatch path
 
 ## Placeholder Scan
 
-- 无 TBD/TODO
-- 所有代码片段完整
-- 类型、方法名一致
+- No TBD/TODO
+- All code complete
+- Types and method names consistent
 
 ---
 
