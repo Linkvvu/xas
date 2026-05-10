@@ -60,7 +60,7 @@ int main()
 
   auto pipeline = server.setCodec(std::make_shared<EchoCodec>());
 
-  pipeline.onMessage([&pipeline](xas::SessionPtr sess, xas::Buffer msg) {
+  pipeline.route(0, [&pipeline](xas::SessionPtr sess, xas::Buffer msg) {
     spdlog::info("echo {} bytes to id={}", msg.size(), sess->id());
     pipeline.sendMsg(sess, msg);
   });
