@@ -13,19 +13,14 @@ class CodecHandle {
 public:
   using TypedCb = std::function<void(SessionPtr, T)>;
 
-  CodecHandle(std::function<void(TypedCb)> registerCb,
-              std::function<Buffer(const T&)> encodeFn,
-              std::function<void(uint16_t, TypedCb)> routeCb = nullptr,
-              std::function<void(TypedCb)> routeDefaultCb = nullptr)
-      : registerCb_(std::move(registerCb))
-      , encode_(std::move(encodeFn))
+  CodecHandle(std::function<Buffer(const T&)> encodeFn,
+              std::function<void(uint16_t, TypedCb)> routeCb,
+              std::function<void(TypedCb)> routeDefaultCb)
+      : encode_(std::move(encodeFn))
       , routeCb_(std::move(routeCb))
       , routeDefaultCb_(std::move(routeDefaultCb))
   {
   }
-
-  // 注册消息回调
-  void onMessage(TypedCb cb) { registerCb_(std::move(cb)); }
 
   // 注册路由
   void route(uint16_t cmd, TypedCb cb) {
@@ -41,7 +36,6 @@ public:
   void sendMsg(SessionPtr sess, const T& msg) { sess->send(encode_(msg)); }
 
 private:
-  std::function<void(TypedCb)> registerCb_;
   std::function<Buffer(const T&)> encode_;
   std::function<void(uint16_t, TypedCb)> routeCb_;
   std::function<void(TypedCb)> routeDefaultCb_;
