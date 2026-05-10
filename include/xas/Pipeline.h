@@ -23,8 +23,6 @@ public:
   {
   }
 
-  void setMessageCb(TypedCb cb) { cb_ = std::move(cb); }
-
   void setErrorCb(std::function<void(SessionPtr, std::error_code)> cb) {
     errorCb_ = std::move(cb);
   }
@@ -48,24 +46,13 @@ public:
         sess->forceClose(ec);
         return;
       }
-      if (cb_) {
-        uint16_t key = MessageCmd<T>::extract(*result);
-        auto it = routes_.find(key);
+      uint16_t key = MessageCmd<T>::extract(*result);
+      auto it = routes_.find(key);
         if (it != routes_.end()) {
           it->second(sess, std::move(*result));
-        } else {
-          cb_(sess, std::move(*result));
-        }
-      } else if (defaultCb_) {
-        uint16_t key = MessageCmd<T>::extract(*result);
-        auto it = routes_.find(key);
-        if (it != routes_.end()) {
-          it->second(sess, std::move(*result));
-        } else {
+        } else if (defaultCb_) {
           defaultCb_(sess, std::move(*result));
         }
-      }
-      // cb_ 和 defaultCb_ 都为空 → 静默丢弃
     }
   }
 
@@ -73,7 +60,6 @@ public:
 
 private:
   std::shared_ptr<Codec> codec_;
-  TypedCb cb_;
   std::function<void(SessionPtr, std::error_code)> errorCb_;
   std::map<uint16_t, TypedCb> routes_;
   TypedCb defaultCb_;
