@@ -44,10 +44,12 @@ public:
     return CodecHandle<T>(
         [pipeline](const T& msg) { return pipeline->encode(msg); },
         [wp = std::weak_ptr(pipeline)](uint16_t cmd, auto cb) {
-          if (auto p = wp.lock()) p->route(cmd, std::move(cb));
+          if (auto p = wp.lock())
+            p->route(cmd, std::move(cb));
         },
         [wp = std::weak_ptr(pipeline)](auto cb) {
-          if (auto p = wp.lock()) p->routeDefault(std::move(cb));
+          if (auto p = wp.lock())
+            p->routeDefault(std::move(cb));
         });
   }
 
@@ -71,6 +73,7 @@ private:
   ServerConfig config_;
 
   asio::io_context ioc_;
+  asio::strand<asio::io_context::executor_type> strand_;
   asio::ip::tcp::acceptor acceptor_;
 
   mutable std::mutex sessionsMutex_;

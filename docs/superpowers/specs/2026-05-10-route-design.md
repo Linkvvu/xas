@@ -29,9 +29,12 @@ process() 修改:
           it->second(sess, *msg);
       else if (defaultCb_)
           defaultCb_(sess, *msg);
-      // else: 静默丢弃
+      else
+          ;  // 静默丢弃
   }
 ```
+
+Note: `onMessage` 被移除，所有消息处理必须通过 `route()` 或 `routeDefault()` 显式注册。
 
 ## 用户接口
 
@@ -46,12 +49,8 @@ pipeline.route(2, [](xas::SessionPtr sess, Request req) {
     // cmd=2: send message
 });
 
-pipeline.route(3, [](xas::SessionPtr sess, Request req) {
-    // cmd=3: query user
-});
-
 pipeline.routeDefault([](xas::SessionPtr sess, Request req) {
-    // unknown cmd handler
+    // 所有未匹配 cmd 的 fallback
 });
 ```
 

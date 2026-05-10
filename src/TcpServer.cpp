@@ -11,6 +11,7 @@ TcpServer::TcpServer(std::string host, uint16_t port, ServerConfig config)
     , port_(port)
     , config_(std::move(config))
     , ioc_()
+    , strand_(asio::make_strand(ioc_))
     , acceptor_(ioc_)
     , shutdownTimer_(ioc_)
 {
@@ -127,8 +128,11 @@ void TcpServer::stop()
 
   std::call_once(stopOnce_, [this] {
     // Phase 1: stop accepting new connections.
-    std::error_code ec;
-    acceptor_.close(ec);
+
+    asio::dispatch(strand_, [this] {
+      std::error_code ec;
+      acceptor_.close(ec);
+    });
 
     // Phase 2: snapshot sessions and initiate graceful close on each.
     // All close() calls are posted to ioc_ *before* the work guard is reset,
@@ -177,68 +181,78 @@ void TcpServer::stop()
 // ── Accept loop ───────────────────────────────────────────────────────────
 void TcpServer::doAccept()
 {
-  acceptor_.async_accept(
-      asio::make_strand(ioc_),
-      [this](std::error_code ec, asio::ip::tcp::socket socket) {
-        if (ec) {
-          // acceptor_.close() triggers this – stop the loop.
-          if (ec != asio::error::operation_aborted) {
-            config_.logger->error("accept error: {}", ec.message());
-          }
-          return;
-        }
+  asio::dispatch(strand_, [this] {
+    if (!acceptor_.is_open()) {
+      return;
+    }
 
-        asio::post(ioc_, [this, sock = std::move(socket)]() mutable {
-          bool overloaded = false;
-          {
-            std::lock_guard<std::mutex> lk(sessionsMutex_);
-            overloaded = (sessions_.size() >= config_.maxConnections);
-          }
-
-          if (overloaded) {
-            std::error_code closeEc;
-            sock.close(closeEc);
-            if (overloadCb_)
-              overloadCb_();
-            config_.logger->warn(
-                "max connections reached, rejected new connection");
+    acceptor_.async_accept(
+        ioc_,
+        [this](std::error_code ec, asio::ip::tcp::socket socket) {
+          if (ec) {
+            // acceptor_.close() triggers this – stop the loop.
+            if (ec != asio::error::operation_aborted) {
+              config_.logger->error("accept error: {}", ec.message());
+            }
             return;
           }
 
-          auto sess = std::make_shared<TcpSession>(std::move(sock), config_);
+          asio::post(ioc_, [this, sock = std::move(socket)]() mutable {
+            bool overloaded = false;
+            {
+              std::lock_guard<std::mutex> lk(sessionsMutex_);
+              overloaded = (sessions_.size() >= config_.maxConnections);
+            }
 
-          if (rawCb_) {
-            sess->setRawCallback(rawCb_);
-          }
+            if (overloaded) {
+              std::error_code closeEc;
+              sock.close(closeEc);
+              if (overloadCb_)
+                overloadCb_();
+              config_.logger->warn(
+                  "max connections reached, rejected new connection");
+              return;
+            }
 
-          sess->setDisconnectCallback([this](SessionPtr s, std::error_code e) {
-            if (disconnectCb_)
-              disconnectCb_(s, e);
-            asio::post(ioc_, [this, id = s->id()] { removeSession(id); });
+            auto sess = std::make_shared<TcpSession>(std::move(sock), config_);
+
+            if (rawCb_) {
+              sess->setRawCallback(rawCb_);
+            }
+
+            sess->setDisconnectCallback(
+                [this](SessionPtr s, std::error_code e) {
+                  if (disconnectCb_) {
+                    disconnectCb_(s, e);
+                  }
+
+                  s->stop();
+                  asio::post(ioc_, [this, id = s->id()] { removeSession(id); });
+                });
+
+            if (errorCb_)
+              sess->setErrorCallback(errorCb_);
+            if (idleCb_)
+              sess->setIdleCallback(idleCb_);
+
+            {
+              std::lock_guard<std::mutex> lk(sessionsMutex_);
+              sessions_[sess->id()] = sess;
+            }
+
+            config_.logger->debug("new session {} from {}:{}",
+                                  sess->id(),
+                                  sess->remoteAddress(),
+                                  sess->remotePort());
+
+            if (connectCb_)
+              connectCb_(sess);
+            sess->start();
           });
 
-          if (errorCb_)
-            sess->setErrorCallback(errorCb_);
-          if (idleCb_)
-            sess->setIdleCallback(idleCb_);
-
-          {
-            std::lock_guard<std::mutex> lk(sessionsMutex_);
-            sessions_[sess->id()] = sess;
-          }
-
-          config_.logger->debug("new session {} from {}:{}",
-                                sess->id(),
-                                sess->remoteAddress(),
-                                sess->remotePort());
-
-          if (connectCb_)
-            connectCb_(sess);
-          sess->start();
+          doAccept();
         });
-
-        doAccept();
-      });
+  });
 }
 
 // ── Session helpers ───────────────────────────────────────────────────────

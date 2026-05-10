@@ -40,7 +40,8 @@ private:
   void setIdleCallback(std::function<void(SessionPtr)> cb);
 
   void start(); // 启动 async_read 循环和空闲定时器
-
+  void stop();
+  
   void doRead();
   void doWrite();
   void resetIdleTimer();

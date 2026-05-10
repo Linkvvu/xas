@@ -126,6 +126,12 @@ void TcpSession::start()
   });
 }
 
+void TcpSession::stop()
+{
+  // std::error_code ec;
+  // idleTimer_.cancel(ec);
+}
+
 // ── Private implementation ────────────────────────────────────────────────
 void TcpSession::doRead()
 {
@@ -211,15 +217,17 @@ void TcpSession::doWrite()
 
 void TcpSession::resetIdleTimer()
 {
-  if (config_.idleTimeoutSec == 0)
-    return;
+  asio::dispatch(strand_, [self = shared_from_this()] {
+    if (self->config_.idleTimeoutSec == 0 || !self->connected_)
+      return;
 
-  idleTimer_.expires_after(std::chrono::seconds(config_.idleTimeoutSec));
-  idleTimer_.async_wait(asio::bind_executor(
-      strand_,
-      [self = shared_from_this()](const std::error_code& ec) {
-        self->onIdleTimeout(ec);
-      }));
+    self->idleTimer_.expires_after(
+        std::chrono::seconds(self->config_.idleTimeoutSec));
+    self->idleTimer_.async_wait(
+        asio::bind_executor(self->strand_, [self](const std::error_code& ec) {
+          self->onIdleTimeout(ec);
+        }));
+  });
 }
 
 void TcpSession::onIdleTimeout(const std::error_code& ec)
