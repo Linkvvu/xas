@@ -33,7 +33,7 @@ public:
   }
 
   // 编码并通过 sess 发送
-  void sendMsg(SessionPtr sess, const T& msg) { sess->send(encode_(msg)); }
+  void sendMsg(SessionPtr sess, const T& msg) { if (encode_) sess->send(encode_(msg)); }
 
 private:
   std::function<Buffer(const T&)> encode_;
