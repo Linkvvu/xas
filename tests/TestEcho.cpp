@@ -136,7 +136,7 @@ TEST_F(EchoServer, ConnectAndEcho)
   auto handle = makeEchoServer(port);
 
   // Echo: when a message arrives send it straight back on the same session.
-  handle.onMessage([&handle](xas::SessionPtr sess, xas::Buffer msg) {
+  handle.route(0, [&handle](xas::SessionPtr sess, xas::Buffer msg) {
     handle.sendMsg(sess, msg);
   });
 
@@ -361,4 +361,161 @@ TEST_F(EchoServer, GracefulShutdown)
 
   // Suppress TearDown double-stop (server_ is still set but already stopped).
   // TearDown calls stop()+wait() again which is safe due to std::call_once.
+}
+
+
+
+// ── Request codec ─────────────────────────────────────────────────────────────
+// 每条消息带 uint16_t cmd 头（前2字节为大端序cmd，后面是payload）
+struct Request {
+    uint16_t cmd;
+    xas::Buffer payload;
+};
+
+struct RequestCodec {
+    using MessageType = Request;
+
+    tl::expected<Request, std::error_code> decode(xas::Buffer& buf) {
+        if (buf.size() < 2) {
+            return tl::unexpected(xas::make_error_code(xas::xas_errc::incomplete_data));
+        }
+        Request req;
+        req.cmd = (static_cast<uint16_t>(buf[0]) << 8) | static_cast<uint16_t>(buf[1]);
+        req.payload = xas::Buffer(buf.begin() + 2, buf.end());
+        buf.clear();
+        return req;
+    }
+
+    xas::Buffer encode(const Request& req) {
+        xas::Buffer out;
+        out.push_back(static_cast<uint8_t>(req.cmd >> 8));
+        out.push_back(static_cast<uint8_t>(req.cmd & 0xFF));
+        out.insert(out.end(), req.payload.begin(), req.payload.end());
+        return out;
+    }
+};
+
+// ── Route Tests ───────────────────────────────────────────────────────────────
+
+class RouteTest : public ::testing::Test {
+protected:
+    void startServer() {
+        port_ = getAvailablePort();
+        server_ = std::make_unique<xas::TcpServer>("127.0.0.1", port_);
+        server_->onConnect([this](xas::SessionPtr s) { sessionCount_.fetch_add(1); });
+        server_->onDisconnect([this](xas::SessionPtr, std::error_code) { sessionCount_.fetch_sub(1); });
+        server_->start();
+    }
+
+    void stopServer() {
+        server_.reset();
+    }
+
+    uint16_t port_;
+    std::unique_ptr<xas::TcpServer> server_;
+    std::atomic<int> sessionCount_{0};
+};
+
+// Test: cmd=1 routed to correct handler
+TEST_F(RouteTest, RouteToSpecificHandler) {
+    startServer();
+
+    auto pipeline = server_->setCodec(std::make_shared<RequestCodec>());
+
+    std::atomic<bool> cmd1Called{false};
+    pipeline.route(1, [&cmd1Called](xas::SessionPtr, Request req) {
+        EXPECT_EQ(req.cmd, 1);
+        cmd1Called.store(true);
+    });
+
+    SyncClient client;
+    client.connect(port_);
+
+    // Send cmd=1
+    Request req{1, {'h','i'}};
+    client.write(RequestCodec{}.encode(req));
+
+    client.close();
+    stopServer();
+
+    EXPECT_TRUE(cmd1Called.load());
+}
+
+// Test: cmd=2 NOT routed to cmd=1 handler
+TEST_F(RouteTest, NoRouteForDifferentCmd) {
+    startServer();
+
+    auto pipeline = server_->setCodec(std::make_shared<RequestCodec>());
+
+    std::atomic<int> cmd1CallCount{0};
+    pipeline.route(1, [&cmd1CallCount](xas::SessionPtr, Request req) {
+        cmd1CallCount.fetch_add(1);
+    });
+
+    SyncClient client;
+    client.connect(port_);
+
+    // Send cmd=2 (not registered)
+    Request req{2, {'t','e','s','t'}};
+    client.write(RequestCodec{}.encode(req));
+
+    client.close();
+    stopServer();
+
+    // Should not trigger cmd=1 handler
+    EXPECT_EQ(cmd1CallCount.load(), 0);
+}
+
+// Test: unmatched cmd with no default -> silent drop
+TEST_F(RouteTest, UnmatchedCmdSilentDrop) {
+    startServer();
+
+    auto pipeline = server_->setCodec(std::make_shared<RequestCodec>());
+
+    std::atomic<int> totalCalls{0};
+    pipeline.route(1, [&totalCalls](xas::SessionPtr, Request) { totalCalls.fetch_add(1); });
+    // No default handler registered
+
+    SyncClient client;
+    client.connect(port_);
+
+    // Send cmd=999 (not registered, no default)
+    Request req{999, {'x'}};
+    client.write(RequestCodec{}.encode(req));
+
+    // Wait a bit for any potential callbacks
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    client.close();
+    stopServer();
+
+    EXPECT_EQ(totalCalls.load(), 0);  // Should silently drop
+}
+
+// Test: unmatched cmd with default -> triggers default
+TEST_F(RouteTest, UnmatchedCmdFallsToDefault) {
+    startServer();
+
+    auto pipeline = server_->setCodec(std::make_shared<RequestCodec>());
+
+    std::atomic<int> defaultCallCount{0};
+    pipeline.routeDefault([&defaultCallCount](xas::SessionPtr, Request req) {
+        EXPECT_EQ(req.cmd, 999);
+        defaultCallCount.fetch_add(1);
+    });
+
+    SyncClient client;
+    client.connect(port_);
+
+    // Send cmd=999 (unmatched, should hit default)
+    Request req{999, {'y'}};
+    client.write(RequestCodec{}.encode(req));
+
+    // Give server time to process
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    client.close();
+    stopServer();
+
+    EXPECT_EQ(defaultCallCount.load(), 1);
 }
